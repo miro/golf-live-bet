@@ -129,6 +129,30 @@ Bet
 - `Bet` depends on `Market` + `Participant`. Resolution writes `Bet.payout` and `Participant.bankroll` atomically together.
 - Realtime delivery is a transport concern layered *on top of* the model; the model is the source of truth, the transport never is.
 
+## Architecture — tech stack
+
+The chosen stack and the constraints each choice imposes. Recorded here (not in chat) so the rationale survives across sessions. Stack is durable state; replacing a layer is a contract change and updates this section.
+
+| Layer | Choice | Why |
+|-------|--------|-----|
+| **Backend (data + auth + realtime)** | **Supabase** | One product covers all three. Real **Postgres** matches the relational data contract above directly. Google OAuth built in. Realtime **Broadcast** can fire from the database — the mechanism that makes `INV-simultaneous-close` honest. Open-source / self-hostable → low lock-in for a learning build. |
+| **Realtime transport** | **Supabase Broadcast, database-driven** | Market open/close emitted from a Postgres function on the **server clock**, fanned out to all subscribers at once. *Not* Postgres Changes (Supabase steers to Broadcast for non-trivial use, and DB-driven broadcast is what enforces a single authoritative close instant). |
+| **Frontend framework** | **Next.js 16 (App Router)** | Largest ecosystem → most Supabase-integration guidance and examples; lowest dead-end risk for a solo summer ship. |
+| **Language** | **TypeScript, strict** | Required for the ASDLC typed-contract discipline; enables generated DB types below. |
+| **Type-safe data layer** | **Generated Supabase types + Zod** | DB schema → generated TS types makes the §Architecture data contract compile-time-checked. Zod validates runtime invariants types can't catch (non-integer line, stake ≤ bankroll, bet-before-close). |
+| **Styling / UI** | **Tailwind CSS + shadcn/ui** | Phone-first, fast, ubiquitous examples in the Next ecosystem; owned (not vendored) components. Token config is the future home for an Experience-Modeling design schema. |
+| **Hosting** | **Vercel (frontend) + Supabase (backend)** | First-party Next host, zero-config, push-to-deploy. Backend hosted by Supabase separately. Lock-in reversible at this scale. |
+| **Repo / governance** | **Single GitHub repo · conventional commits · strict ESLint + Prettier · `/specs` + `/pbis` in-repo** | The ASDLC "standardized parts" jigs for a solo dev: lint as mold, spec under version control, commits as provenance trail. |
+
+### Stack-imposed constraints
+
+- **Live screens are client components.** The realtime board, bet entry, and countdown are client-side (Supabase subscriptions, optimistic UI, timers). Use Next Server Components only for the static shell. Do **not** attempt to render the live market board as a Server Component.
+- **The server clock is the only authority for time.** Window open/close times originate server-side (DB function); client countdowns are display-only and must never be trusted to close a market.
+- **Generated DB types are regenerated on every schema change** and committed, so the data contract and the code cannot silently diverge.
+- **Atomic resolution runs server-side** (Postgres function / transaction): compute parimutuel payouts and update all bankrolls in one transaction, satisfying `INV-conservation` and the `Bet`↔`Participant` atomicity in Dependency directions.
+
+> Considered and rejected for the first build: **Convex** (excellent reactive DX but proprietary store, weaker fit for the relational contract and explicit server-clock close); **Firebase** (NoSQL fights the relational model and transactional parimutuel payouts); **TanStack Start** (best type-safety/methodology fit but RC-stage with thin Supabase guidance — too much risk for a summer ship). Revisit only if a layer's constraints stop holding.
+
 ## Anti-Patterns — what an implementation must NOT do
 
 - **Do NOT serve a sealed value before its market closes** — not to observers, not via any "preview"/debug path, not to the reporting player's own client.
