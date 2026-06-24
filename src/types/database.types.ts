@@ -107,7 +107,17 @@ export type Database = {
     Functions: {
       close_expired_markets: {
         Args: Record<never, never>;
-        Returns: number;  // count of markets closed/voided
+        Returns: number;
+      };
+      place_bet: {
+        Args: {
+          p_market_id:      string;
+          p_participant_id: string;
+          p_selection:      string;
+          p_stake:          number;
+        };
+        // { bet_id, bankroll } on success or { error } on failure
+        Returns: Record<string, unknown>;
       };
     };
     Enums: Record<never, never>;
