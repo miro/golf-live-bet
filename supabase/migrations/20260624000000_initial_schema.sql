@@ -184,3 +184,10 @@ grant usage, select, update           on all sequences in schema public to authe
 -- anon: read only; the deny_direct_events_read RLS policy still blocks events.sealed_value
 grant select          on all tables    in schema public to anon;
 grant usage, select   on all sequences in schema public to anon;
+
+-- ------------------------------------------------------------------ --
+-- REALTIME PUBLICATION
+-- Enable Postgres Changes on markets so all subscribers receive the
+-- server-authoritative close event simultaneously (INV-simultaneous-close).
+-- ------------------------------------------------------------------ --
+alter publication supabase_realtime add table public.markets;

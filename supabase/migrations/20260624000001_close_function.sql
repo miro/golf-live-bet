@@ -16,14 +16,15 @@ create extension if not exists pg_cron;
 -- Refund logic (writing Bet.payout + Participant.bankroll) is step 2.
 -- ------------------------------------------------------------------ --
 create or replace function public.close_expired_markets()
-returns void
+returns integer   -- number of markets closed/voided this call
 language plpgsql
 security definer
 set search_path = public
 as $$
 declare
-  rec record;
-  new_status text;
+  rec           record;
+  new_status    text;
+  closed_count  integer := 0;
 begin
   for rec in
     select
@@ -42,20 +43,10 @@ begin
     set status = new_status
     where id = rec.market_id;
 
-    -- Broadcast to all subscribers on the 'markets' channel.
-    -- sealed_value included only now — satisfies INV-sealed-value.
-    perform realtime.send(
-      jsonb_build_object(
-        'event',        'market_closed',
-        'market_id',    rec.market_id,
-        'status',       new_status,
-        'sealed_value', rec.sealed_value,
-        'line',         rec.line
-      ),
-      'market_closed',
-      'markets'
-    );
+    closed_count := closed_count + 1;
   end loop;
+
+  return closed_count;
 end;
 $$;
 

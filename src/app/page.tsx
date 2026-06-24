@@ -17,15 +17,9 @@ type MarketRow = {
   sealed_value: number | null;
 };
 
-type BroadcastClose = {
-  market_id: string;
-  status: string;
-  sealed_value: number | null;
-  line: number;
-};
-
 export default function ObserverPage() {
   const [market, setMarket] = useState<MarketRow | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
   const [log, setLog] = useState<string[]>([]);
   const [opening, setOpening] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -38,22 +32,51 @@ export default function ObserverPage() {
     setLog((prev) => [`[${ts}] ${msg}`, ...prev].slice(0, 50));
   }
 
+  // Display-only countdown. Never closes a market — INV-simultaneous-close.
   useEffect(() => {
+    if (!market || market.status !== "open") {
+      const id = setTimeout(() => setSecondsLeft(null), 0);
+      return () => clearTimeout(id);
+    }
+    const tick = () => {
+      const left = Math.round((new Date(market.closes_at).getTime() - Date.now()) / 1000);
+      setSecondsLeft(Math.max(0, left));
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [market]);
+
+  useEffect(() => {
+    // Subscribe to ALL changes on markets (INSERT = new market opened, UPDATE = market closed).
+    // INV-simultaneous-close: the UPDATE fires from the Postgres function on the server clock;
+    // every subscriber receives it at the same instant via WAL replication.
     const channel = supabase
-      .channel("markets")
+      .channel("market-changes")
       .on(
-        "broadcast",
-        { event: "market_closed" },
-        (payload: { payload: BroadcastClose }) => {
-          const p = payload.payload;
-          addLog(
-            `BROADCAST market_closed → status=${p.status} sealed_value=${p.sealed_value ?? "void"} line=${p.line}`
-          );
-          setMarket((prev) =>
-            prev?.id === p.market_id
-              ? { ...prev, status: p.status, sealed_value: p.sealed_value }
-              : prev
-          );
+        "postgres_changes",
+        { event: "*", schema: "public", table: "markets" },
+        async (payload) => {
+          if (payload.eventType === "INSERT") {
+            const m = payload.new as MarketRow;
+            setMarket({ ...m, sealed_value: null });
+            addLog(`Market opened id=${m.id.substring(0, 8)}… line=${m.line}`);
+          } else if (payload.eventType === "UPDATE") {
+            const updated = payload.new as { id: string; status: string };
+            addLog(`DB change: market ${updated.id.substring(0, 8)}… → status=${updated.status}`);
+            if (updated.status === "closed" || updated.status === "void") {
+              // Query market_state — sealed_value is now revealed since status = 'closed'.
+              // INV-sealed-value: the view returns null while open; this query only runs post-close.
+              const { data, error } = await supabase
+                .from("market_state")
+                .select("*")
+                .eq("id", updated.id)
+                .single();
+              if (error) { addLog(`fetch error: ${error.message}`); return; }
+              setMarket(data as MarketRow);
+              addLog(`REVEALED sealed_value=${data.sealed_value ?? "void"} line=${data.line}`);
+            }
+          }
         }
       )
       .subscribe((status) => {
@@ -90,7 +113,12 @@ export default function ObserverPage() {
     if (!res.ok) {
       addLog(`ERROR: ${json.error}`);
     } else {
-      addLog("close_expired_markets() called — waiting for broadcast…");
+      const n = json.closed as number;
+      if (n === 0) {
+        addLog("close_expired_markets(): 0 markets closed (closes_at still in the future — wait for countdown to reach 0)");
+      } else {
+        addLog(`close_expired_markets(): ${n} market(s) closed — waiting for DB change event…`);
+      }
     }
     setClosing(false);
   }
@@ -145,7 +173,7 @@ export default function ObserverPage() {
 {`id:           ${market.id}
 type:         ${market.type}
 line:         ${market.line} yards (over/under)
-closes_at:    ${new Date(market.closes_at).toLocaleTimeString()}
+closes_at:    ${new Date(market.closes_at).toLocaleTimeString()}${secondsLeft !== null ? `  ← ${secondsLeft}s remaining (display only)` : ""}
 sealed_value: ${market.sealed_value !== null ? `${market.sealed_value} yards ← REVEALED` : "(sealed until close)"}`}
           </pre>
         </section>

@@ -7,11 +7,11 @@ import { createServiceClient } from "@/lib/supabase/server";
 // the Postgres function enforces that; it is not a force-close bypass.
 export async function POST() {
   const supabase = createServiceClient();
-  const { error } = await supabase.rpc("close_expired_markets");
+  const { data: closed, error } = await supabase.rpc("close_expired_markets");
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({ ok: true, closed });
 }

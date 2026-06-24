@@ -9,9 +9,10 @@ const DEV_DRIVE_TYPE  = "00000000-0000-0000-0000-000000000030";
 // INV-noninteger-line: line is always non-integer
 const DRIVE_LINE_YARDS = 250.5;
 
-// Window duration for step-1 demo. pg_cron fires within 60s,
-// so 90s ensures the cron always lands inside the window.
-const WINDOW_SECONDS = 90;
+// Window duration for step-1 demo.
+// 30s is short enough to verify quickly; pg_cron still sweeps within 60s
+// so auto-close fires within one extra minute if Force Close isn't used.
+const WINDOW_SECONDS = 30;
 
 // INV-sealed-value: value is set server-side and stored in events.sealed_value.
 // It is never returned to the client; only revealed via market_state after close.
@@ -49,7 +50,7 @@ export async function POST() {
       status:    "open",
       house_seed: 100,
     })
-    .select("id, line, opens_at, closes_at, status")
+    .select("id, type, line, opens_at, closes_at, status")
     .single();
 
   if (marketError) {

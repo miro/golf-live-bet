@@ -107,7 +107,7 @@ export type Database = {
     Functions: {
       close_expired_markets: {
         Args: Record<never, never>;
-        Returns: undefined;
+        Returns: number;  // count of markets closed/voided
       };
     };
     Enums: Record<never, never>;
