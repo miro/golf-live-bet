@@ -44,7 +44,7 @@ All market types resolve to **one** observer interaction: *a window opens → pi
 
 ### Measured over/under (e.g. drive, pin, putt)
 - Opening the input opens a fixed-duration betting window.
-- The measured value is entered during the window but **sealed** — invisible to everyone, including the reporting player — until the window closes.
+- The measured value is entered during the window and **locked** on submit (no editing afterward). It is **sealed from observers** — invisible on every observer-facing surface (broadcast, API, bet view) until the window closes. The reporting player may see their own locked submission as confirmation.
 - Observers bet **blind** over/under a **non-integer line** for the full window.
 - At the fixed close, the window shuts for **all observers simultaneously**, the value is revealed, and the pool resolves.
 
@@ -100,7 +100,7 @@ Event             # something that happened on the course
   subject_id       -> User      # who it HAPPENED TO (may equal author)
   hole             # int, optional
   created_at
-  sealed_value     # measured_pool only; set on entry, NEVER served before market close
+  sealed_value     # measured_pool only; locked on entry, NEVER served to observers before market close
   value_entered_at
 
 Market            # a betting opportunity spawned by an Event
@@ -155,7 +155,8 @@ The chosen stack and the constraints each choice imposes. Recorded here (not in 
 
 ## Anti-Patterns — what an implementation must NOT do
 
-- **Do NOT serve a sealed value before its market closes** — not to observers, not via any "preview"/debug path, not to the reporting player's own client.
+- **Do NOT expose a sealed value to any observer (or anyone who could bet on the market) before its market closes** — not via the broadcast, the API, or any "preview"/debug path. The reporting player seeing their *own* submitted value is fine; an observer seeing it is the violation.
+- **Do NOT allow a submitted measured value to be edited after submit.** It locks on submit so it cannot be changed in response to betting activity.
 - **Do NOT run betting close as per-client timers.** Close is a single server-clock event; all observers transition together.
 - **Do NOT let event/market knowledge reach a live betting view** for anyone who could know the outcome (see `INV-betting-knowledge-wall`).
 - **Do NOT mint coins.** Total payout ≤ pot + house seed, always.
@@ -176,11 +177,11 @@ Verification rules that exist independently of any task. *How we know it works.*
 - Observers can stake coins on an open market and cannot after it closes.
 - Markets close simultaneously for all observers and resolve with correct parimutuel payouts.
 - Bankrolls and a live leaderboard reflect resolved markets.
-- No path exposes a sealed value before close.
+- No observer-facing path exposes a sealed value before close.
 
 ## Regression Guardrails (invariants — must NEVER break)
 
-- **INV-sealed-value:** A measured market's value is never readable through any interface before `Market.closes_at`.
+- **INV-sealed-value:** A measured market's value is never readable by any observer (or any participant who could bet on the market), through any interface, before `Market.closes_at`. The reporting player may see their own submitted value as confirmation. The value **locks on submit** and cannot be edited afterward.
 - **INV-simultaneous-close:** Market close is authoritative on the server clock and identical for all observers.
 - **INV-no-late-bets:** No bet is accepted at or after `Market.closes_at`.
 - **INV-betting-knowledge-wall:** No participant who can know an event's outcome may place a bet informed by that knowledge. *(In the current MVP this is enforced bluntly: players do not bet at all. When players may bet between rounds in future, this invariant still holds — live-event knowledge must never reach a live betting view.)*
@@ -194,12 +195,18 @@ Verification rules that exist independently of any task. *How we know it works.*
 ```gherkin
 Feature: Live Bet markets
 
-  Scenario: Sealed value is never exposed before close
+  Scenario: Sealed value is never exposed to observers before close
     Given a measured market is open
-    And the reporting player has entered a value
-    When any client requests the market state
+    And the reporting player has entered and locked a value
+    When an observer requests the market state
     Then the response does not contain the value
     Until the market has closed
+
+  Scenario: Reporting player sees their own submitted value
+    Given a measured market is open
+    When the reporting player submits a value
+    Then their own client confirms the submitted value
+    And the value can no longer be edited
 
   Scenario: Betting closes simultaneously and rejects late bets
     Given a market with a fixed close time
